@@ -63,6 +63,23 @@ def ersetze_groessentext(text: str) -> str:
     return text
 
 
+def extrahiere_preis(detail_soup: BeautifulSoup) -> str:
+    # Preis aus Detailseite extrahieren (Preisstil div.price__container > span.price-item)
+    preis = 'Nicht gefunden'
+    preis_container = detail_soup.select_one('div.price__container')
+    if preis_container:
+        # Versuche zuerst den Verkaufspreis
+        sale_price = preis_container.select_one('span.price-item--sale')
+        if sale_price and sale_price.get_text(strip=True):
+            preis = sale_price.get_text(strip=True)
+        else:
+            # Fallback auf regulären Preis
+            regular_price = preis_container.select_one('span.price-item--regular')
+            if regular_price and regular_price.get_text(strip=True):
+                preis = regular_price.get_text(strip=True)
+    return preis
+
+
 def extrahiere_produkt_info(item: BeautifulSoup, img_folder: str) -> Optional[Dict[str, str]]:
     titel_elem = item.select_one('h3.card__heading.h5')
     card_media = item.select_one('div.card__media')
@@ -82,7 +99,8 @@ def extrahiere_produkt_info(item: BeautifulSoup, img_folder: str) -> Optional[Di
 
     produkt['Produktlink'] = urljoin(BASE_URL, link_elem.get('href'))
 
-    detail_fields = ['Art.-Nr', 'Größen', 'Empfohlenes Alter', 'Primärmaterial', 'Füllungen', 'Pflegehinweise', 'Zertifizierungen', 'Hergestellt in']
+    detail_fields = ['Art.-Nr', 'Größen', 'Empfohlenes Alter', 'Primärmaterial', 'Füllungen', 'Pflegehinweise',
+                     'Zertifizierungen', 'Hergestellt in', 'Preis']
     attributes = {field: 'Nicht gefunden' for field in detail_fields}
 
     try:
@@ -117,6 +135,9 @@ def extrahiere_produkt_info(item: BeautifulSoup, img_folder: str) -> Optional[Di
                 if key in attributes:
                     attributes[key] = value
 
+    # Preis auslesen und setzen
+    attributes['Preis'] = extrahiere_preis(detail_soup)
+
     produkt.update(attributes)
     return produkt
 
@@ -137,6 +158,7 @@ def setup_database(db_path: str) -> sqlite3.Connection:
             pflegehinweise TEXT,
             zertifizierungen TEXT,
             hergestellt_in TEXT,
+            preis TEXT,
             produktlink TEXT UNIQUE
         )
     ''')
@@ -149,8 +171,8 @@ def speichere_produkt(conn: sqlite3.Connection, produkt: Dict[str, str]) -> None
     cursor.execute('''
         INSERT INTO produkte (
             art_nr, titel, bild_pfad, groessen, empfohlenes_alter, primaermaterial,
-            fuellungen, pflegehinweise, zertifizierungen, hergestellt_in, produktlink
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            fuellungen, pflegehinweise, zertifizierungen, hergestellt_in, preis, produktlink
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(produktlink) DO UPDATE SET
             art_nr=excluded.art_nr,
             titel=excluded.titel,
@@ -161,11 +183,13 @@ def speichere_produkt(conn: sqlite3.Connection, produkt: Dict[str, str]) -> None
             fuellungen=excluded.fuellungen,
             pflegehinweise=excluded.pflegehinweise,
             zertifizierungen=excluded.zertifizierungen,
-            hergestellt_in=excluded.hergestellt_in
+            hergestellt_in=excluded.hergestellt_in,
+            preis=excluded.preis
     ''', (
-        produkt.get('Art.-Nr'), produkt.get('Titel'), produkt.get('Bild Pfad'), produkt.get('Größen'), produkt.get('Empfohlenes Alter'),
-        produkt.get('Primärmaterial'), produkt.get('Füllungen'), produkt.get('Pflegehinweise'), produkt.get('Zertifizierungen'),
-        produkt.get('Hergestellt in'), produkt.get('Produktlink')
+        produkt.get('Art.-Nr'), produkt.get('Titel'), produkt.get('Bild Pfad'), produkt.get('Größen'),
+        produkt.get('Empfohlenes Alter'), produkt.get('Primärmaterial'), produkt.get('Füllungen'),
+        produkt.get('Pflegehinweise'), produkt.get('Zertifizierungen'), produkt.get('Hergestellt in'),
+        produkt.get('Preis'), produkt.get('Produktlink')
     ))
     conn.commit()
 
