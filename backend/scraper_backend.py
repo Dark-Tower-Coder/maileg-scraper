@@ -1,11 +1,10 @@
 from bs4 import BeautifulSoup
 import requests
-import csv
 import os
+import sqlite3
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Optional
-
 
 BASE_URL = 'https://maileg.com'
 COLLECTION_BASE_URL = 'https://maileg.com/de/collections/mause'
@@ -122,49 +121,82 @@ def extrahiere_produkt_info(item: BeautifulSoup, img_folder: str) -> Optional[Di
     return produkt
 
 
-def schreibe_csv(produkte: List[Dict[str, str]], csv_path: str, fields: List[str]) -> None:
-    try:
-        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fields)
-            writer.writeheader()
-            for produkt in produkte:
-                if produkt.get('Bild Pfad'):
-                    produkt['Bild Pfad'] = os.path.relpath(produkt['Bild Pfad'], start=os.path.dirname(csv_path))
-                writer.writerow(produkt)
-    except IOError as e:
-        print(f"Fehler beim Schreiben der CSV-Datei: {e}")
+def setup_database(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS produkte (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            art_nr TEXT,
+            titel TEXT,
+            bild_pfad TEXT,
+            groessen TEXT,
+            empfohlenes_alter TEXT,
+            primaermaterial TEXT,
+            fuellungen TEXT,
+            pflegehinweise TEXT,
+            zertifizierungen TEXT,
+            hergestellt_in TEXT,
+            produktlink TEXT UNIQUE
+        )
+    ''')
+    conn.commit()
+    return conn
+
+
+def speichere_produkt(conn: sqlite3.Connection, produkt: Dict[str, str]) -> None:
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO produkte (
+            art_nr, titel, bild_pfad, groessen, empfohlenes_alter, primaermaterial,
+            fuellungen, pflegehinweise, zertifizierungen, hergestellt_in, produktlink
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(produktlink) DO UPDATE SET
+            art_nr=excluded.art_nr,
+            titel=excluded.titel,
+            bild_pfad=excluded.bild_pfad,
+            groessen=excluded.groessen,
+            empfohlenes_alter=excluded.empfohlenes_alter,
+            primaermaterial=excluded.primaermaterial,
+            fuellungen=excluded.fuellungen,
+            pflegehinweise=excluded.pflegehinweise,
+            zertifizierungen=excluded.zertifizierungen,
+            hergestellt_in=excluded.hergestellt_in
+    ''', (
+        produkt.get('Art.-Nr'), produkt.get('Titel'), produkt.get('Bild Pfad'), produkt.get('Größen'), produkt.get('Empfohlenes Alter'),
+        produkt.get('Primärmaterial'), produkt.get('Füllungen'), produkt.get('Pflegehinweise'), produkt.get('Zertifizierungen'),
+        produkt.get('Hergestellt in'), produkt.get('Produktlink')
+    ))
+    conn.commit()
 
 
 def scraper():
     img_folder = 'img'
-    csv_folder = 'csv'
+    db_folder = 'db'
     os.makedirs(img_folder, exist_ok=True)
-    os.makedirs(csv_folder, exist_ok=True)
+    os.makedirs(db_folder, exist_ok=True)
 
-    fields = ['Art.-Nr', 'Titel', 'Bild Pfad', 'Größen', 'Empfohlenes Alter', 'Primärmaterial', 'Füllungen', 'Pflegehinweise', 'Zertifizierungen', 'Hergestellt in', 'Produktlink']
+    db_path = os.path.join(db_folder, 'maileg.db')
+    conn = setup_database(db_path)
 
-    alle_produkte = []
     seite = 1
+    total = 0
     while True:
         items = lade_produktliste_seite(seite)
         if not items:
             break
 
         for item in items:
-            info = extrahiere_produkt_info(item, img_folder)
-            if info:
-                alle_produkte.append(info)
+            produkt_info = extrahiere_produkt_info(item, img_folder)
+            if produkt_info:
+                speichere_produkt(conn, produkt_info)
+                total += 1
 
         seite += 1
 
-    zeitstempel = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    csv_filename = f"maileg_produkte_{zeitstempel}.csv"
-    csv_path = os.path.join(csv_folder, csv_filename)
-
-    schreibe_csv(alle_produkte, csv_path, fields)
-
-    print(f"Gesamtzahl erfasster Produkte: {len(alle_produkte)}")
-    print(f"Daten wurden in '{csv_path}' gespeichert, Bilder in '{img_folder}'.")
+    print(f"Gesamtzahl erfasster Produkte: {total}")
+    print(f"Datenbank liegt unter: '{db_path}'")
+    print(f"Bilder gespeichert in: '{img_folder}'")
 
 
 if __name__ == '__main__':
