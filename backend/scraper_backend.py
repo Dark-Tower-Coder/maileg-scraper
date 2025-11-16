@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Optional
+import time
 
 BASE_URL = 'https://maileg.com'
 COLLECTION_BASE_URL = 'https://maileg.com/de/collections/mause'
@@ -131,14 +132,17 @@ def extrahiere_produkt_info(item: BeautifulSoup, img_folder: str) -> Optional[Di
                     else:
                         wert_elem = box.find('p', class_='mb-0')
                         value = wert_elem.get_text(strip=True) if wert_elem else 'Nicht gefunden'
+
                     if key == 'Größen':
                         value = ersetze_groessentext(value)
                     if key == 'Empfohlenes Alter' and value.lower() == 'all ages':
                         value = '0'
+
                     if key in attributes:
                         attributes[key] = value
     except requests.RequestException as e:
         print(f"Fehler beim Laden der Produktseite {produkt['Produktlink']}: {e}")
+        return produkt  # Rückgabe mit den bisher gesammelten Daten, wenn Fehler
 
     produkt.update(attributes)
     produkt['Preis'] = extrahiere_preis(detail_soup if 'detail_soup' in locals() else None)
@@ -222,6 +226,18 @@ def hole_quelle_id(conn, name, url):
     conn.commit()
     return cursor.lastrowid
 
+def hole_letzten_preis(conn, produkt_id):
+    cursor = conn.cursor()
+    cursor.execute('SELECT preis FROM preise WHERE produkt_id=? ORDER BY zeitstempel DESC LIMIT 1', (produkt_id,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+def hole_art_nr(conn, produkt_id):
+    cursor = conn.cursor()
+    cursor.execute('SELECT art_nr FROM produkte WHERE id=?', (produkt_id,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
 def speichere_produkt(conn, produkt):
     cursor = conn.cursor()
     hersteller_id = hole_attribut_id(conn, 'hersteller', produkt.get('Hergestellt in'))
@@ -257,6 +273,11 @@ def speichere_produkt(conn, produkt):
     return produkt_id
 
 def speichere_preis(conn, produkt_id, preis, produktlink, quelle_name, quelle_url):
+    letzte_preis = hole_letzten_preis(conn, produkt_id)
+    art_nr = hole_art_nr(conn, produkt_id) or 'unbekannt'
+    if letzte_preis == preis:
+        print(f"Kein neuer Preis für Art.-Nr {art_nr}. Überspringe.")
+        return
     quelle_id = hole_quelle_id(conn, quelle_name, quelle_url)
     zeitstempel = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
     cursor = conn.cursor()
@@ -264,8 +285,10 @@ def speichere_preis(conn, produkt_id, preis, produktlink, quelle_name, quelle_ur
         INSERT INTO preise (produkt_id, preis, zeitstempel, quelle_id, produktlink) VALUES (?, ?, ?, ?, ?)
     ''', (produkt_id, preis, zeitstempel, quelle_id, produktlink))
     conn.commit()
+    print(f"Preis aktualisiert für Art.-Nr {art_nr}: {preis}")
 
 def scraper():
+    start = time.time()
     img_folder = 'img'
     db_folder = 'db'
     os.makedirs(img_folder, exist_ok=True)
@@ -291,9 +314,12 @@ def scraper():
                 total += 1
         seite += 1
 
+    dauer = time.time() - start
     print(f"Gesamtzahl erfasster Produkte: {total}")
+    print(f"Laufzeit des Durchlaufs: {dauer:.2f} Sekunden")
     print(f"Datenbank liegt unter: '{db_path}'")
     print(f"Bilder gespeichert in: '{img_folder}'")
 
 if __name__ == '__main__':
+    import time
     scraper()
