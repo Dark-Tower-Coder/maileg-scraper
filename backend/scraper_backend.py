@@ -1,3 +1,4 @@
+import logging
 from bs4 import BeautifulSoup
 import requests
 import os
@@ -20,19 +21,26 @@ MATERIAL_TRANSLATION = {
     'Metal': 'Metall'
 }
 
+# Logging Setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+)
+logger = logging.getLogger(__name__)
+
 def lade_produktliste_seite(seite: int) -> List[BeautifulSoup]:
     url = f"{COLLECTION_BASE_URL}?page={seite}"
-    print(f"Lade Seite {seite}: {url}")
+    logger.info(f"Lade Seite {seite}: {url}")
     try:
         response = requests.get(url)
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"Fehler beim Laden der Seite {seite}: {e}")
+        logger.error(f"Fehler beim Laden der Seite {seite}: {e}")
         return []
     soup = BeautifulSoup(response.content, 'html.parser')
     collection = soup.find('div', class_='collection')
     if not collection:
-        print("Collection-Bereich nicht gefunden.")
+        logger.error("Collection-Bereich nicht gefunden.")
         return []
     items = collection.find_all('li', class_='grid__item')
     return items
@@ -44,7 +52,7 @@ def speichere_bild(url: str, ordner: str) -> Optional[str]:
         response = requests.get(url)
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"Bild konnte nicht heruntergeladen werden: {url}, Fehler: {e}")
+        logger.error(f"Bild konnte nicht heruntergeladen werden: {url}, Fehler: {e}")
         return None
     parsed_url = urlparse(url)
     dateiname = os.path.basename(parsed_url.path)
@@ -53,7 +61,7 @@ def speichere_bild(url: str, ordner: str) -> Optional[str]:
         with open(pfad, 'wb') as f:
             f.write(response.content)
     except IOError as e:
-        print(f"Bild konnte nicht gespeichert werden: {pfad}, Fehler: {e}")
+        logger.error(f"Bild konnte nicht gespeichert werden: {pfad}, Fehler: {e}")
         return None
     return pfad
 
@@ -66,7 +74,9 @@ def ersetze_groessentext(text: str) -> str:
         text = text.replace('Depth', 'Tiefe')
     return text
 
-def extrahiere_preis(detail_soup: BeautifulSoup) -> str:
+def extrahiere_preis(detail_soup: Optional[BeautifulSoup]) -> str:
+    if detail_soup is None:
+        return 'Nicht gefunden'
     preis = 'Nicht gefunden'
     preis_container = detail_soup.select_one('div.price__container')
     if preis_container:
@@ -141,8 +151,8 @@ def extrahiere_produkt_info(item: BeautifulSoup, img_folder: str) -> Optional[Di
                     if key in attributes:
                         attributes[key] = value
     except requests.RequestException as e:
-        print(f"Fehler beim Laden der Produktseite {produkt['Produktlink']}: {e}")
-        return produkt  # Rückgabe mit den bisher gesammelten Daten, wenn Fehler
+        logger.error(f"Fehler beim Laden der Produktseite {produkt['Produktlink']}: {e}")
+        # Produkt weiter mit (ggf. unvollständigen) Attributen
 
     produkt.update(attributes)
     produkt['Preis'] = extrahiere_preis(detail_soup if 'detail_soup' in locals() else None)
@@ -276,7 +286,7 @@ def speichere_preis(conn, produkt_id, preis, produktlink, quelle_name, quelle_ur
     letzte_preis = hole_letzten_preis(conn, produkt_id)
     art_nr = hole_art_nr(conn, produkt_id) or 'unbekannt'
     if letzte_preis == preis:
-        print(f"Kein neuer Preis für Art.-Nr {art_nr}. Überspringe.")
+        logger.info(f"Kein neuer Preis für Art.-Nr {art_nr}. Überspringe.")
         return
     quelle_id = hole_quelle_id(conn, quelle_name, quelle_url)
     zeitstempel = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
@@ -285,7 +295,7 @@ def speichere_preis(conn, produkt_id, preis, produktlink, quelle_name, quelle_ur
         INSERT INTO preise (produkt_id, preis, zeitstempel, quelle_id, produktlink) VALUES (?, ?, ?, ?, ?)
     ''', (produkt_id, preis, zeitstempel, quelle_id, produktlink))
     conn.commit()
-    print(f"Preis aktualisiert für Art.-Nr {art_nr}: {preis}")
+    logger.info(f"Preis aktualisiert für Art.-Nr {art_nr}: {preis}")
 
 def scraper():
     start = time.time()
@@ -315,11 +325,16 @@ def scraper():
         seite += 1
 
     dauer = time.time() - start
-    print(f"Gesamtzahl erfasster Produkte: {total}")
-    print(f"Laufzeit des Durchlaufs: {dauer:.2f} Sekunden")
-    print(f"Datenbank liegt unter: '{db_path}'")
-    print(f"Bilder gespeichert in: '{img_folder}'")
+    logger.info(f"Gesamtzahl erfasster Produkte: {total}")
+    logger.info(f"Laufzeit des Durchlaufs: {dauer:.2f} Sekunden")
+    logger.info(f"Datenbank liegt unter: '{db_path}'")
+    logger.info(f"Bilder gespeichert in: '{img_folder}'")
 
 if __name__ == '__main__':
     import time
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+    )
     scraper()
